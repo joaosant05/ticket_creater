@@ -12,11 +12,14 @@ if __name__ == "__main__":
 
     db = Database()
     relatorios = Relatorios()
-    extrair_relatorio = ExtrairRelatorio(root, db)
+
+    login = Login(root, relatorios, None, db)
+    
+    extrair_relatorio = ExtrairRelatorio(root, db, login)
 
     layout = Layout(root, relatorios, db, extrair_relatorio)
     
-    login = Login(root, relatorios, layout, db)
- 
+    login.layout = layout
+
     login.criar_tela_login()
     root.mainloop()

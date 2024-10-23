@@ -92,12 +92,45 @@ class Tickets:
                         ticket.get("created_at"),
                         "Excluir"
                     ))
+                    # Bind na coluna de Ações para deletar
+                    self.tree.bind("<Double-1>", self.on_treeview_double_click)
             except Error as e:
                 messagebox.showerror("Erro", f"Erro ao buscar tickets do MySQL: {e}")
             finally:
                 if connection.is_connected():
                     cursor.close()
                     connection.close()
+
+    def on_treeview_double_click(self, event):
+        item = self.tree.selection()
+        if item:
+            item_values = self.tree.item(item, "values")
+            ticket_id = item_values[0]
+            self.deletar_ticket(ticket_id)
+
+    def deletar_ticket(self, ticket_id):
+        if messagebox.askyesno("Confirmar Exclusão", f"Tem certeza que deseja excluir o ticket ID: {ticket_id}?"):
+            connection = self.db.conectar_banco()
+            if connection is not None:
+                try:
+                    cursor = connection.cursor()
+                    
+                    # Deletar anexos associados ao ticket
+                    delete_anexos_query = "DELETE FROM anexos WHERE ticket_id = %s"
+                    cursor.execute(delete_anexos_query, (ticket_id,))
+                    
+                    delete_ticket_query = "DELETE FROM relatorios WHERE id = %s"
+                    cursor.execute(delete_ticket_query, (ticket_id,))
+                    
+                    connection.commit()
+                    messagebox.showinfo("Sucesso", "Ticket e anexos excluídos com sucesso.")
+                    self.atualizar_tickets()
+                except Error as e:
+                    messagebox.showerror("Erro", f"Erro ao excluir o ticket: {e}")
+                finally:
+                    if connection.is_connected():
+                        cursor.close()
+                        connection.close()
 
     def editar_ticket_selecionado(self):
         selected_item = self.tree.selection()

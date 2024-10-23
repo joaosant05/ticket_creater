@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk
 from extrair_relatorio import ExtrairRelatorio
 
 class Login:
@@ -9,9 +9,11 @@ class Login:
         self.layout = layout
         self.db = db
         self.user = tk.StringVar()
-        self.tickets_window = None
 
     def criar_tela_login(self):
+        for widget in self.root.winfo_children():
+            widget.destroy()
+
         login_frame = ttk.Frame(self.root, padding="10 10 10 10")
         login_frame.grid(column=0, row=0, sticky=(tk.N, tk.W, tk.E, tk.S))
         self.root.columnconfigure(0, weight=1)
@@ -30,5 +32,5 @@ class Login:
             self.layout.abrir_tela_relatorios()
         elif user_selection == "Extrair relatorio":
             self.root.withdraw()
-            extrair_relatorio_window = ExtrairRelatorio(self.root, self.db)
+            extrair_relatorio_window = ExtrairRelatorio(self.root, self.db, self)
             extrair_relatorio_window.abrir_tela_extrair_relatorio()

@@ -9,18 +9,19 @@ from docx.opc.constants import RELATIONSHIP_TYPE
 from docx.shared import Pt
 from pathlib import Path
 from mysql.connector import Error
-from tempfile import NamedTemporaryFile
 import mimetypes
 import magic
 import os
 
+
 class ExtrairRelatorio:
-    def __init__(self, root, db):
+    def __init__(self, root, db, tela_login):
         self.root = root
         self.db = db
+        self.tela_login = tela_login
         self.tickets_window = None
         self.tree = None
-        
+
     def abrir_tela_extrair_relatorio(self):
         if self.tickets_window is not None:
             self.tickets_window.destroy()
@@ -59,9 +60,42 @@ class ExtrairRelatorio:
         scrollbar.grid(column=1, row=1, sticky=(tk.N, tk.S))
         self.tree.configure(yscrollcommand=scrollbar.set)
 
-        ttk.Button(mainframe, text="Gerar Relatório", command=self.gerar_relatorio).grid(column=0, row=2, pady=10)
+        ttk.Button(mainframe, text="Voltar", command=self.voltar_para_login).grid(column=0, row=2, sticky=tk.W, padx=5, pady=10)
+        ttk.Button(mainframe, text="Gerar Relatório", command=self.gerar_relatorio).grid(column=0, row=2, sticky=tk.E, padx=5, pady=10)
 
         self.atualizar_tickets()
+
+    def atualizar_tickets(self):
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+
+        connection = self.db.conectar_banco()
+        if connection is not None:
+            try:
+                cursor = connection.cursor(dictionary=True)
+                query = "SELECT * FROM relatorios"
+                cursor.execute(query)
+                tickets = cursor.fetchall()
+
+                for ticket in tickets:
+                    self.tree.insert("", tk.END, values=(
+                        ticket.get("id"),
+                        ticket.get("tier"),
+                        ticket.get("ambiente"),
+                        ticket.get("frequencia"),
+                        ticket.get("usuario"),
+                        ticket.get("navegador"),
+                        ticket.get("organizacao"),
+                        ticket.get("marca"),
+                        ticket.get("created_at"),
+                    ))
+
+            except Error as e:
+                messagebox.showerror("Erro", f"Erro ao buscar tickets do MySQL: {e}")
+            finally:
+                if connection.is_connected():
+                    cursor.close()
+                    connection.close()
 
     def atualizar_tickets(self):
         for item in self.tree.get_children():
@@ -103,6 +137,9 @@ class ExtrairRelatorio:
 
         document = Document()
         document.add_heading('Relatório de Tickets', 0)
+
+        # Criar a pasta para salvar os anexos
+        anexos_pasta = self.criar_pasta_anexos()
 
         for item in selected_items:
             item_values = self.tree.item(item, "values")
@@ -146,7 +183,7 @@ class ExtrairRelatorio:
                     anexos = cursor.fetchall()
 
                     for anexo in anexos:
-                        self.processar_anexo(document, anexo)
+                        self.processar_anexo(document, anexo, anexos_pasta)
 
                 except Error as e:
                     messagebox.showerror("Erro", f"Erro ao buscar ticket do MySQL: {e}")
@@ -157,36 +194,40 @@ class ExtrairRelatorio:
 
         self.salvar_arquivo(document, "relatorio_tickets.docx")
 
+    def voltar_para_login(self):
+        self.tickets_window.destroy()
+        self.root.deiconify()
+        self.tela_login.criar_tela_login()
+
     def adicionar_paragrafo_formatado(self, document, titulo, texto):
         par = document.add_paragraph()
         run_titulo = par.add_run(titulo)
         run_titulo.bold = True
         run_titulo.font.size = Pt(12)
-
         par.add_run(f" {texto}")
 
-    def processar_anexo(self, document, anexos):
-        blob_data = anexos['anexo']
+    def processar_anexo(self, document, anexo, anexos_pasta):
+        blob_data = anexo['anexo']
         if blob_data:
             mime_type = self.deduzir_mime_type(blob_data)
-            if mime_type:  # Verifique se o mime_type não é None
-                temp_file = self.salvar_blob_como_arquivo_temp(blob_data, mime_type)
+            if mime_type:
+                arquivo_path = self.salvar_blob_como_arquivo(blob_data, mime_type, anexos_pasta)
                 if mime_type.startswith('image'):
                     try:
-                        document.add_picture(temp_file, width=Inches(2))
+                        document.add_picture(str(arquivo_path), width=Inches(2))  # Converte Path para string
                     except Exception as e:
                         messagebox.showerror("Erro", f"Erro ao inserir imagem: {e}")
                 elif mime_type.startswith('video'):
                     paragraph = document.add_paragraph(f"(anexo vídeo: ")
-                    self.add_hyperlink(paragraph, temp_file, "Clique para abrir o vídeo")
+                    self.add_hyperlink(paragraph, arquivo_path.as_uri(), "Clique para abrir o vídeo")
                     paragraph.add_run(")")
                 elif mime_type == 'application/pdf':
                     paragraph = document.add_paragraph(f"(anexo PDF: ")
-                    self.add_hyperlink(paragraph, temp_file, "Clique para abrir o PDF")
+                    self.add_hyperlink(paragraph, arquivo_path.as_uri(), "Clique para abrir o PDF")
                     paragraph.add_run(")")
                 else:
                     paragraph = document.add_paragraph(f"Anexo desconhecido ({mime_type}): ")
-                    self.add_hyperlink(paragraph, temp_file, "Clique para abrir")
+                    self.add_hyperlink(paragraph, arquivo_path.as_uri(), "Clique para abrir")
             else:
                 messagebox.showwarning("Aviso", "Tipo MIME não reconhecido.")
         else:
@@ -207,10 +248,40 @@ class ExtrairRelatorio:
             document.save(downloads_path)
             print(f"Arquivo salvo na pasta de Downloads: {downloads_path}")
         else:
-            print("Não foi possível salvar o arquivo em nenhum dos diretórios padrão.")
+            messagebox.showerror("Erro", "Não foi possível salvar o arquivo em nenhum diretório padrão.")
+
+    def deduzir_mime_type(self, blob_data):
+        mime = magic.Magic(mime=True)
+        return mime.from_buffer(blob_data)
+
+    def salvar_blob_como_arquivo(self, blob_data, mime_type, anexos_pasta):
+        extensao = mimetypes.guess_extension(mime_type)
+        arquivo_path = anexos_pasta / f"anexo_{int(Path().stat().st_mtime)}{extensao}"  # Nome único
+        with open(arquivo_path, 'wb') as file:
+            file.write(blob_data)
+        return arquivo_path
+
+    def criar_pasta_anexos(self):
+        # Primeiro, tentamos criar a pasta no Desktop
+        desktop_path = Path(os.path.join(os.path.expanduser("~"), "Desktop"))
+        onedrive_desktop_path = Path(os.path.join(os.path.expanduser("~"), "OneDrive", "Desktop"))
+
+        anexos_pasta = desktop_path / "Anexos_Tickets"
+        
+        if desktop_path.exists():
+            # Se o Desktop normal existir, criamos a pasta lá
+            anexos_pasta.mkdir(exist_ok=True)
+            return anexos_pasta
+        elif onedrive_desktop_path.exists():
+            # Se o Desktop estiver no OneDrive, criamos a pasta no Desktop do OneDrive
+            anexos_pasta = onedrive_desktop_path / "Anexos_Tickets"
+            anexos_pasta.mkdir(exist_ok=True)
+            return anexos_pasta
+        else:
+            # Caso nenhum dos dois caminhos exista, lançamos um erro
+            raise FileNotFoundError("Não foi possível encontrar o caminho do Desktop ou do OneDrive.")
 
     def add_hyperlink(self, paragraph, url, text):
-        """Adiciona um hyperlink a um parágrafo."""
         part = paragraph.part
         r_id = part.relate_to(url, RELATIONSHIP_TYPE.HYPERLINK, is_external=True)
 
@@ -218,37 +289,10 @@ class ExtrairRelatorio:
         hyperlink.set(qn('r:id'), r_id)
 
         new_run = OxmlElement('w:r')
-        rPr = OxmlElement('w:rPr')
+        r_pr = OxmlElement('w:rPr')
 
-        rStyle = OxmlElement('w:rStyle')
-        rStyle.set(qn('w:val'), 'Hyperlink')
-        rPr.append(rStyle)
-        new_run.append(rPr)
-
-        text_element = OxmlElement('w:t')
-        text_element.text = text
-        new_run.append(text_element)
+        new_run.append(r_pr)
+        new_run.text = text
 
         hyperlink.append(new_run)
-
-        paragraph._element.append(hyperlink)
-
-        return hyperlink
-
-    def salvar_blob_como_arquivo_temp(self, blob_data, mime_type):
-        temp_file = NamedTemporaryFile(delete=False, suffix=self.deduzir_extensao(mime_type))
-        with open(temp_file.name, 'wb') as file:
-            file.write(blob_data)
-        return temp_file.name
-
-    def deduzir_extensao(self, mime_type):
-        if mime_type.startswith('image'):
-            return '.jpg'
-        elif mime_type.startswith('video'):
-            return '.mp4'
-        elif mime_type == 'application/pdf':
-            return '.pdf'
-        return '.bin'
-
-    def deduzir_mime_type(self, blob_data):
-        return magic.from_buffer(blob_data, mime=True)
+        paragraph._p.append(hyperlink)
